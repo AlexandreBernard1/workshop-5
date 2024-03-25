@@ -45,96 +45,74 @@ export async function node(
 
   // TODO implement this
   // this route allows the node to receive messages from other nodes
-  // I want to implement this route with function like the broadcast in the toute start but i got somme issues so i put all the codes in one route
-  // The intitial idea is to have two functions handlePhase1 and handlePhase2 to handle the two phases of the algorithm
-  // These functions are still in the code but not used
-  node.post("/message", async (req, res) => { // first phase of the algorithm
-    let { k, x, type } = req.body;
-    if (!state.killed && !isFaulty) {
-      if (type == "2P") {
-        if (!proposals.has(k)) proposals.set(k, []);
-        proposals.get(k)!.push(x);
-        const proposal = proposals.get(k)!;
-        if (proposal.length >= N - F) {
-          const CN = proposal.filter((x) => x == 0).length;
-          const CY = proposal.filter((x) => x == 1).length;
-          x = CN > N / 2 ? 0 : CY > N / 2 ? 1 : "?";
-          for (let i = 0; i < N; i++) {
-            fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ k, x, type: "2V" }),
-            });
-          }
+  // Fonction pour envoyer des messages à un noeud spécifique
+async function sendMessage(nodePort: number, message: any) {
+  try {
+    await fetch(`http://localhost:${nodePort}/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message),
+    });
+  } catch (error) {
+    console.error(`Erreur lors de l'envoi du message au port ${nodePort}:`, error);
+  }
+}
+
+node.post("/message", async (req, res) => {
+  // première phase de l'algorithme
+  let { k, x, type } = req.body;
+  if (!state.killed && !isFaulty) {
+    if (type == "propose") {
+      if (!proposals.has(k)) proposals.set(k, []);
+      proposals.get(k)!.push(x);
+      const proposal = proposals.get(k)!;
+      if (proposal.length >= N - F) {
+        const cst1 = proposal.filter((x) => x == 0).length;
+        const cst2 = proposal.filter((x) => x == 1).length;
+        if (cst1 > N / 2) {
+          x = 0;
+        } else if (cst2 > N / 2) {
+          x = 1;
+        } else {
+          x = "?";
         }
-      } else if (type == "2V") { // second phase of the algorithm
-        if (!votes.has(k)) votes.set(k, []);
-        votes.get(k)!.push(x);
-        const vote = votes.get(k)!;
-        if (vote.length >= N - F) {
-          const CN = vote.filter((x) => x == 0).length;
-          const CY = vote.filter((x) => x == 1).length;
-          if (CN >= F + 1) {
-            state.x = 0;
-            state.decided = true;
-          } else if (CY >= F + 1) {
-            state.x = 1;
-            state.decided = true;
-          } else {
-            state.x = CN + CY > 0 && CN > CY ? 0 : CN + CY > 0 && CN < CY ? 1 : Math.random() > 0.5 ? 0 : 1;
-            state.k = k + 1;
-            for (let i = 0; i < N; i++) {
-              fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ k: state.k, x: state.x, type: "2P" }),
-              });
+        for (let i = 0; i < N; i++) {
+          await sendMessage(BASE_NODE_PORT + i, { k, x, type: "vote" });
+        }
+      }
+    } else if (type == "vote") { 
+      if (!votes.has(k)) votes.set(k, []);
+      votes.get(k)!.push(x);
+      const vote = votes.get(k)!;
+      if (vote.length >= N - F) {
+        const cst1 = vote.filter((x) => x == 0).length;
+        const cst2 = vote.filter((x) => x == 1).length;
+        if (cst1 >= F + 1) {
+          state.x = 0;
+          state.decided = true;
+        } else if (cst2 >= F + 1) {
+          state.x = 1;
+          state.decided = true;
+        } else {
+          if (cst1 + cst2 > 0) {
+            if (cst1 > cst2) {
+              state.x = 0;
+            } else {
+              state.x = 1;
             }
+          } else {
+            state.x = Math.random() > 0.5 ? 0 : 1;
+          }
+                    state.k = k + 1;
+          for (let i = 0; i < N; i++) {
+            await sendMessage(BASE_NODE_PORT + i, { k: state.k, x: state.x, type: "propose" });
           }
         }
       }
     }
-    res.status(200).send("success");
+  }
+  res.status(200).send("success");
   });
-  
-  // function to handle the first phase of the algorithm
-  async function handlePhase1(k: number, x: Value) {
-    if (!proposals.has(k)) proposals.set(k, []);
-    proposals.get(k)!.push(x);
-  
-    const proposal = proposals.get(k)!;
-    if (proposal.length >= N - F) {
-      const CN = proposal.filter(val => val === 0).length;
-      const CY = proposal.filter(val => val === 1).length;
-      const newX = CN > N / 2 ? 0 : CY > N / 2 ? 1 : "?";
-      await broadcastMessage({ k, x: newX, type: "2V" });
-    }
-  }
-  
-  // function to handle the second phase of the algorithm
-  async function handlePhase2(k: number, x: Value) {
-    if (!votes.has(k)) votes.set(k, []);
-    votes.get(k)!.push(x);
-  
-    const vote = votes.get(k)!;
-    if (vote.length >= N - F) {
-      const CN = vote.filter(val => val === 0).length;
-      const CY = vote.filter(val => val === 1).length;
-  
-      if (CN >= F + 1) {
-        state.x = 0;
-        state.decided = true;
-      } else if (CY >= F + 1) {
-        state.x = 1;
-        state.decided = true;
-      } else {
-        state.x = CN > CY ? 0 : CN < CY ? 1 : Math.random() > 0.5 ? 0 : 1;
-        state.k = k + 1;
-        await broadcastMessage({ k: state.k, x: state.x, type: "2P" });
-      }
-    }
-  }
-  
 
   // TODO implement this
   // this route is used to start the consensus algorithm
@@ -144,7 +122,7 @@ export async function node(
       state.k = 1;
       state.x = initialValue;
       state.decided = false;
-      await broadcastMessage({ k: state.k, x: state.x, type: "2P" });
+      await broadcastMessage({ k: state.k, x: state.x, type: "propose" });
     } else {
       state.decided = null;
       state.x = null;
